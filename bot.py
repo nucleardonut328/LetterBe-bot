@@ -1,12 +1,15 @@
 """
-PhotoLetters Telegram Bot
+PhotoLetters Telegram Bot — Render.com версия
+Flask-сервер + polling в фоновом потоке
 """
 
 import logging
 import os
 import sys
+import threading
 from io import BytesIO
 
+from flask import Flask
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     Application,
@@ -26,6 +29,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+PORT = int(os.environ.get("PORT", 10000))
+
 if not TELEGRAM_TOKEN:
     logger.error("TELEGRAM_BOT_TOKEN не установлен!")
     sys.exit(1)
@@ -38,53 +43,34 @@ user_sessions = {}
 
 MAIN_KB = ReplyKeyboardMarkup(
     [["📸 Создать коллаж"], ["❌ Отмена"]],
-    one_time_keyboard=True,
-    resize_keyboard=True,
+    one_time_keyboard=True, resize_keyboard=True,
 )
 
 FONT_KB = ReplyKeyboardMarkup(
-    [
-        ["Impact", "Arial Black"],
-        ["Bebas Neue", "Teko"],
-        ["❌ Отмена"],
-    ],
-    one_time_keyboard=True,
-    resize_keyboard=True,
+    [["Impact", "Arial Black"], ["Bebas Neue", "Teko"], ["❌ Отмена"]],
+    one_time_keyboard=True, resize_keyboard=True,
 )
 
 COLOR_KB = ReplyKeyboardMarkup(
-    [
-        ["⬛ Чёрный", "🟫 Тёмный"],
-        ["🟦 Синий", "🟥 Красный"],
-        ["❌ Отмена"],
-    ],
-    one_time_keyboard=True,
-    resize_keyboard=True,
+    [["⬛ Чёрный", "🟫 Тёмный"], ["🟦 Синий", "🟥 Красный"], ["❌ Отмена"]],
+    one_time_keyboard=True, resize_keyboard=True,
 )
 
 FONT_MAP = {
-    "Impact": "impact",
-    "Arial Black": "arial_black",
-    "Bebas Neue": "bebas",
-    "Teko": "teko",
+    "Impact": "impact", "Arial Black": "arial_black",
+    "Bebas Neue": "bebas", "Teko": "teko",
 }
 
 COLOR_MAP = {
-    "⬛ Чёрный": "#000000",
-    "🟫 Тёмный": "#0d1117",
-    "🟦 Синий": "#0a0a1f",
-    "🟥 Красный": "#1a0a00",
+    "⬛ Чёрный": "#000000", "🟫 Тёмный": "#0d1117",
+    "🟦 Синий": "#0a0a1f", "🟥 Красный": "#1a0a00",
 }
 
 
 def _reset_user(user_id: int):
     user_sessions[user_id] = {
-        "photos": [],
-        "word": "",
-        "font": "impact",
-        "bg_color": "#000000",
+        "photos": [], "word": "", "font": "impact", "bg_color": "#000000",
     }
-
 
 def _cleanup_user(user_id: int):
     user_sessions.pop(user_id, None)
@@ -93,13 +79,11 @@ def _cleanup_user(user_id: int):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = update.effective_user.id
     _reset_user(user_id)
-
     await update.message.reply_text(
         "👋 Привет! Я бот *PhotoLetters*.\n\n"
         "Я создаю коллажи из твоих фотографий в форме букв слова.\n\n"
         "Например, отправишь слово *LOVE* + 4 фото — получишь красивый коллаж!",
-        parse_mode="Markdown",
-        reply_markup=MAIN_KB,
+        parse_mode="Markdown", reply_markup=MAIN_KB,
     )
     return CHOOSE_ACTION
 
@@ -107,17 +91,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 async def choose_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     text = update.message.text
     user_id = update.effective_user.id
-
     if text == "📸 Создать коллаж":
         await update.message.reply_text(
-            "📝 Введите слово (только буквы, макс. 8 символов):",
+            "📝 Введи слово (только буквы, макс. 8 символов):",
             reply_markup=ReplyKeyboardRemove(),
         )
         return ENTER_WORD
-
     if text in ("❌ Отмена", "/cancel"):
         return await cancel(update, context)
-
     await update.message.reply_text("Используй кнопки ниже 👇", reply_markup=MAIN_KB)
     return CHOOSE_ACTION
 
@@ -125,20 +106,15 @@ async def choose_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 async def enter_word(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = update.effective_user.id
     text = update.message.text.strip().upper()
-
     if not text.isalpha() or len(text) > MAX_PHOTOS:
-        await update.message.reply_text(
-            "❌ Только буквы (A-Z, А-Я), длина 1–8 символов. Попробуй ещё раз:"
-        )
+        await update.message.reply_text("❌ Только буквы, 1–8 символов. Попробуй ещё раз:")
         return ENTER_WORD
-
     user_sessions[user_id]["word"] = text
     word_len = len(text)
-
     await update.message.reply_text(
         f'✅ Слово: *{text}*\n\n'
-        f'📸 Теперь отправь мне *{word_len}* фото (по одному сообщением).\n'
-        f'Первое фото — для буквы *{text[0]}*, второе — для *{text[1]}* и т.д.',
+        f'📸 Отправь *{word_len}* фото (по одному).\n'
+        f'Первое — для *{text[0]}*, второе — для *{text[1]}* и т.д.',
         parse_mode="Markdown",
     )
     return UPLOAD_PHOTOS
@@ -147,48 +123,37 @@ async def enter_word(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 async def upload_photos(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = update.effective_user.id
     session = user_sessions.get(user_id)
-
     if not session:
         await update.message.reply_text("Сессия устарела. Начни с /start")
         return ConversationHandler.END
-
     word = session["word"]
     word_len = len(word)
-
     if not update.message.photo:
         await update.message.reply_text("❌ Пожалуйста, отправь фото (не файл).")
         return UPLOAD_PHOTOS
-
     photo = update.message.photo[-1]
     file = await context.bot.get_file(photo.file_id)
-
     if file.file_size and file.file_size > 10 * 1024 * 1024:
-        await update.message.reply_text("❌ Фото слишком большое (> 10MB). Попробуй другое.")
+        await update.message.reply_text("❌ Фото слишком большое (> 10MB).")
         return UPLOAD_PHOTOS
-
     photo_bytes = await file.download_as_bytearray()
-
     try:
         compressed = compress_image(bytes(photo_bytes))
         session["photos"].append(compressed)
     except Exception as e:
-        logger.warning(f"Ошибка сжатия фото: {e}")
+        logger.warning(f"Ошибка сжатия: {e}")
         session["photos"].append(bytes(photo_bytes))
-
     received = len(session["photos"])
     remaining = word_len - received
-
     if remaining > 0:
         await update.message.reply_text(
             f'✅ Принято *{received}/{word_len}*\n'
-            f'📸 Отправь ещё *{remaining}* фото (следующая буква: *{word[received]}*)',
+            f'📸 Отправь ещё *{remaining}* (следующая: *{word[received]}*)',
             parse_mode="Markdown",
         )
         return UPLOAD_PHOTOS
-
     await update.message.reply_text(
-        "✅ Все фото получены!\n\n🔤 Выбери шрифт:",
-        reply_markup=FONT_KB,
+        "✅ Все фото получены!\n\n🔤 Выбери шрифт:", reply_markup=FONT_KB,
     )
     return CHOOSE_FONT
 
@@ -196,21 +161,16 @@ async def upload_photos(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 async def choose_font(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = update.effective_user.id
     text = update.message.text
-
     if text == "❌ Отмена":
         return await cancel(update, context)
-
     font_id = FONT_MAP.get(text)
     if not font_id:
         await update.message.reply_text("❌ Выбери шрифт из списка 👇", reply_markup=FONT_KB)
         return CHOOSE_FONT
-
     user_sessions[user_id]["font"] = font_id
-
     await update.message.reply_text(
         f'✅ Шрифт: *{text}*\n\n🎨 Выбери цвет фона:',
-        parse_mode="Markdown",
-        reply_markup=COLOR_KB,
+        parse_mode="Markdown", reply_markup=COLOR_KB,
     )
     return CHOOSE_COLOR
 
@@ -218,69 +178,46 @@ async def choose_font(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 async def choose_color(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = update.effective_user.id
     text = update.message.text
-
     if text == "❌ Отмена":
         return await cancel(update, context)
-
     color_hex = COLOR_MAP.get(text)
     if not color_hex:
         await update.message.reply_text("❌ Выбери цвет из списка 👇", reply_markup=COLOR_KB)
         return CHOOSE_COLOR
-
     user_sessions[user_id]["bg_color"] = color_hex
-
     await update.message.reply_text(
-        "⏳ Создаю коллаж... Это может занять несколько секунд.",
-        reply_markup=ReplyKeyboardRemove(),
+        "⏳ Создаю коллаж...", reply_markup=ReplyKeyboardRemove(),
     )
-
     return await process_collage(update, context)
 
 
 async def process_collage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = update.effective_user.id
     session = user_sessions.get(user_id)
-
     if not session:
         await update.message.reply_text("Сессия устарела. Начни с /start")
         return ConversationHandler.END
-
     try:
         collage_bytes = create_collage(
-            photos=session["photos"],
-            word=session["word"],
-            font_id=session["font"],
-            bg_color=session["bg_color"],
+            photos=session["photos"], word=session["word"],
+            font_id=session["font"], bg_color=session["bg_color"],
         )
-
         await update.message.reply_photo(
             photo=collage_bytes,
             caption=f'✅ Коллаж *{session["word"]}* готов!',
             parse_mode="Markdown",
         )
-
-        logger.info(f"Коллаж создан для user={user_id}, word={session['word']}")
-
+        logger.info(f"Коллаж user={user_id}, word={session['word']}")
     except Exception as e:
-        logger.exception(f"Ошибка создания коллажа: {e}")
-        await update.message.reply_text(
-            f'❌ Ошибка при создании коллажа:\n`{str(e)}`',
-            parse_mode="Markdown",
-        )
-
+        logger.exception(f"Ошибка: {e}")
+        await update.message.reply_text(f'❌ Ошибка: `{str(e)}`', parse_mode="Markdown")
     _cleanup_user(user_id)
-
-    await update.message.reply_text(
-        "Хочешь создать ещё один коллаж?",
-        reply_markup=MAIN_KB,
-    )
+    await update.message.reply_text("Хочешь ещё?", reply_markup=MAIN_KB)
     return CHOOSE_ACTION
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    user_id = update.effective_user.id
-    _cleanup_user(user_id)
-
+    _cleanup_user(update.effective_user.id)
     await update.message.reply_text(
         "До свидания! Чтобы начать заново, отправь /start",
         reply_markup=ReplyKeyboardRemove(),
@@ -291,14 +228,22 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"Exception: {context.error}", exc_info=True)
     if update and update.effective_message:
-        await update.effective_message.reply_text(
-            "⚠️ Произошла непредвиденная ошибка. Попробуй /start"
-        )
+        await update.effective_message.reply_text("⚠️ Ошибка. Попробуй /start")
 
 
-def main():
-    logger.info("🚀 Запуск PhotoLetters Bot...")
+flask_app = Flask(__name__)
 
+@flask_app.route("/", methods=["GET"])
+def health():
+    return {"status": "ok", "service": "photoletters-bot", "mode": "polling"}
+
+@flask_app.route("/health", methods=["GET"])
+def health_check():
+    return {"status": "ok"}
+
+
+def run_bot():
+    logger.info("🤖 Запуск polling...")
     application = Application.builder().token(TELEGRAM_TOKEN).build()
 
     conv_handler = ConversationHandler(
@@ -320,12 +265,18 @@ def main():
     application.add_handler(conv_handler)
     application.add_error_handler(error_handler)
 
-    logger.info("🤖 Бот запущен в режиме polling")
-
     application.run_polling(
         drop_pending_updates=True,
         allowed_updates=Update.ALL_TYPES,
     )
+
+
+def main():
+    logger.info("🚀 Запуск PhotoLetters Bot на Render...")
+    bot_thread = threading.Thread(target=run_bot, daemon=True)
+    bot_thread.start()
+    logger.info(f"🌐 Flask-сервер на порту {PORT}")
+    flask_app.run(host="0.0.0.0", port=PORT, debug=False, threaded=True)
 
 
 if __name__ == "__main__":
