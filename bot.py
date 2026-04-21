@@ -1,5 +1,5 @@
 """
-PhotoLetters Telegram Bot — Webhook версия для Render
+PhotoLetters Telegram Bot — Webhook для Render
 """
 
 import logging
@@ -225,7 +225,7 @@ flask_app = Flask(__name__)
 WEBHOOK_PATH = f"/webhook/{TELEGRAM_TOKEN}"
 WEBHOOK_URL = f"https://letterbe-bot.onrender.com{WEBHOOK_PATH}"
 
-# Создаём Telegram Application
+# Создаём Application
 application = Application.builder().token(TELEGRAM_TOKEN).build()
 
 conv_handler = ConversationHandler(
@@ -259,13 +259,13 @@ def health_check():
 def webhook():
     """Получает обновления от Telegram"""
     update = Update.de_json(request.get_json(force=True), application.bot)
-    application.update_queue.put(update)
+    # Синхронно запускаем async обработку
+    asyncio.get_event_loop().run_until_complete(application.process_update(update))
     return "ok", 200
 
 async def setup():
     """Инициализация и установка webhook"""
     await application.initialize()
-    await application.start()
     await application.bot.set_webhook(url=WEBHOOK_URL)
     logger.info(f"✅ Webhook установлен: {WEBHOOK_URL}")
 
