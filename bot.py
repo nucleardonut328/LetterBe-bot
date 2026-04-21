@@ -1,14 +1,14 @@
 """
-PhotoLetters Telegram Bot — Render.com версия
+PhotoLetters Telegram Bot — Webhook версия для Render
 """
 
 import logging
 import os
 import sys
-import threading
+import asyncio
 from io import BytesIO
 
-from flask import Flask
+from flask import Flask, request
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     Application,
@@ -219,49 +219,59 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update and update.effective_message:
         await update.effective_message.reply_text("⚠️ Ошибка. Попробуй /start")
 
+# ─── Flask + Webhook ─────────────────────────────────────────────
 flask_app = Flask(__name__)
+
+WEBHOOK_PATH = f"/webhook/{TELEGRAM_TOKEN}"
+WEBHOOK_URL = f"https://letterbe-bot.onrender.com{WEBHOOK_PATH}"
+
+# Создаём Telegram Application
+application = Application.builder().token(TELEGRAM_TOKEN).build()
+
+conv_handler = ConversationHandler(
+    entry_points=[CommandHandler("start", start)],
+    states={
+        CHOOSE_ACTION: [MessageHandler(filters.TEXT, choose_action)],
+        ENTER_WORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, enter_word)],
+        UPLOAD_PHOTOS: [MessageHandler(filters.PHOTO, upload_photos)],
+        CHOOSE_FONT: [MessageHandler(filters.TEXT, choose_font)],
+        CHOOSE_COLOR: [MessageHandler(filters.TEXT, choose_color)],
+    },
+    fallbacks=[
+        CommandHandler("cancel", cancel),
+        CommandHandler("start", start),
+    ],
+    allow_reentry=True,
+)
+
+application.add_handler(conv_handler)
+application.add_error_handler(error_handler)
 
 @flask_app.route("/", methods=["GET"])
 def health():
-    return {"status": "ok", "service": "photoletters-bot", "mode": "polling"}
+    return {"status": "ok", "service": "photoletters-bot", "mode": "webhook"}
 
 @flask_app.route("/health", methods=["GET"])
 def health_check():
     return {"status": "ok"}
 
-def run_bot():
-    logger.info("🤖 Запуск polling...")
-    application = Application.builder().token(TELEGRAM_TOKEN).build()
+@flask_app.route(WEBHOOK_PATH, methods=["POST"])
+def webhook():
+    """Получает обновления от Telegram"""
+    update = Update.de_json(request.get_json(force=True), application.bot)
+    application.update_queue.put(update)
+    return "ok", 200
 
-    conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("start", start)],
-        states={
-            CHOOSE_ACTION: [MessageHandler(filters.TEXT, choose_action)],
-            ENTER_WORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, enter_word)],
-            UPLOAD_PHOTOS: [MessageHandler(filters.PHOTO, upload_photos)],
-            CHOOSE_FONT: [MessageHandler(filters.TEXT, choose_font)],
-            CHOOSE_COLOR: [MessageHandler(filters.TEXT, choose_color)],
-        },
-        fallbacks=[
-            CommandHandler("cancel", cancel),
-            CommandHandler("start", start),
-        ],
-        allow_reentry=True,
-    )
-
-    application.add_handler(conv_handler)
-    application.add_error_handler(error_handler)
-
-    application.run_polling(
-        drop_pending_updates=True,
-        allowed_updates=Update.ALL_TYPES,
-    )
+async def setup():
+    """Инициализация и установка webhook"""
+    await application.initialize()
+    await application.start()
+    await application.bot.set_webhook(url=WEBHOOK_URL)
+    logger.info(f"✅ Webhook установлен: {WEBHOOK_URL}")
 
 def main():
-    logger.info("🚀 Запуск PhotoLetters Bot на Render...")
-    bot_thread = threading.Thread(target=run_bot, daemon=True)
-    bot_thread.start()
-    logger.info("🤖 Polling поток запущен")
+    logger.info("🚀 Запуск PhotoLetters Bot (webhook)...")
+    asyncio.run(setup())
     logger.info(f"🌐 Flask-сервер на порту {PORT}")
     flask_app.run(host="0.0.0.0", port=PORT, debug=False, threaded=True)
 
