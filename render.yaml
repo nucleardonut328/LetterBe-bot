@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: photoletters-bot
+    env: python
+    plan: free
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "gunicorn bot:flask_app --bind 0.0.0.0:$PORT --workers 1 --threads 4"
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: PYTHON_VERSION
+        value: 3.11.0
