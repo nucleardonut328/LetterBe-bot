@@ -1,11 +1,7 @@
 FROM python:3.11-slim
 
-# Устанавливаем системные зависимости для Pillow
 RUN apt-get update && apt-get install -y \
-    libjpeg-dev \
-    zlib1g-dev \
-    libpng-dev \
-    libfreetype6-dev \
+    libjpeg-dev zlib1g-dev libpng-dev libfreetype6-dev gcc \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -15,4 +11,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-CMD ["gunicorn", "bot:flask_app", "--bind", "0.0.0.0:10000", "--workers", "1", "--threads", "4"]
+CMD ["python", "bot.py"]
