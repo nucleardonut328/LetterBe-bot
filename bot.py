@@ -22,21 +22,24 @@ from telegram.ext import (
 
 from image_processor import create_collage, compress_image
 
+# ─── Logging ─────────────────────────────────────────────────────
 logging.basicConfig(
     format="%(asctime)s | %(levelname)-8s | %(message)s",
     level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
 
+# ─── Config ──────────────────────────────────────────────────────
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 PORT = int(os.environ.get("PORT", 10000))
 
 if not TELEGRAM_TOKEN:
-    logger.error("TELEGRAM_BOT_TOKEN не установлен!")
+    logger.error("❌ TELEGRAM_BOT_TOKEN не установлен!")
     sys.exit(1)
 
 MAX_PHOTOS = 8
 
+# ─── States ──────────────────────────────────────────────────────
 CHOOSE_ACTION, ENTER_WORD, UPLOAD_PHOTOS, CHOOSE_FONT, CHOOSE_COLOR = range(5)
 
 user_sessions = {}
@@ -66,7 +69,7 @@ COLOR_MAP = {
     "🟦 Синий": "#0a0a1f", "🟥 Красный": "#1a0a00",
 }
 
-
+# ─── Session helpers ─────────────────────────────────────────────
 def _reset_user(user_id: int):
     user_sessions[user_id] = {
         "photos": [], "word": "", "font": "impact", "bg_color": "#000000",
@@ -75,7 +78,7 @@ def _reset_user(user_id: int):
 def _cleanup_user(user_id: int):
     user_sessions.pop(user_id, None)
 
-
+# ─── Bot handlers ────────────────────────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = update.effective_user.id
     _reset_user(user_id)
@@ -86,7 +89,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         parse_mode="Markdown", reply_markup=MAIN_KB,
     )
     return CHOOSE_ACTION
-
 
 async def choose_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     text = update.message.text
@@ -101,7 +103,6 @@ async def choose_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         return await cancel(update, context)
     await update.message.reply_text("Используй кнопки ниже 👇", reply_markup=MAIN_KB)
     return CHOOSE_ACTION
-
 
 async def enter_word(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = update.effective_user.id
@@ -118,7 +119,6 @@ async def enter_word(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         parse_mode="Markdown",
     )
     return UPLOAD_PHOTOS
-
 
 async def upload_photos(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = update.effective_user.id
@@ -157,7 +157,6 @@ async def upload_photos(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     )
     return CHOOSE_FONT
 
-
 async def choose_font(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = update.effective_user.id
     text = update.message.text
@@ -174,7 +173,6 @@ async def choose_font(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     )
     return CHOOSE_COLOR
 
-
 async def choose_color(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = update.effective_user.id
     text = update.message.text
@@ -189,7 +187,6 @@ async def choose_color(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         "⏳ Создаю коллаж...", reply_markup=ReplyKeyboardRemove(),
     )
     return await process_collage(update, context)
-
 
 async def process_collage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = update.effective_user.id
@@ -215,7 +212,6 @@ async def process_collage(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await update.message.reply_text("Хочешь ещё?", reply_markup=MAIN_KB)
     return CHOOSE_ACTION
 
-
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     _cleanup_user(update.effective_user.id)
     await update.message.reply_text(
@@ -224,13 +220,12 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     )
     return ConversationHandler.END
 
-
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"Exception: {context.error}", exc_info=True)
     if update and update.effective_message:
         await update.effective_message.reply_text("⚠️ Ошибка. Попробуй /start")
 
-
+# ─── Flask app (для Render) ──────────────────────────────────────
 flask_app = Flask(__name__)
 
 @flask_app.route("/", methods=["GET"])
@@ -241,8 +236,9 @@ def health():
 def health_check():
     return {"status": "ok"}
 
-
+# ─── Telegram app ────────────────────────────────────────────────
 def run_bot():
+    """Запускает polling в отдельном потоке"""
     logger.info("🤖 Запуск polling...")
     application = Application.builder().token(TELEGRAM_TOKEN).build()
 
@@ -270,14 +266,15 @@ def run_bot():
         allowed_updates=Update.ALL_TYPES,
     )
 
+# ─── Запускаем polling сразу при импорте (для gunicorn на Render) ─
+bot_thread = threading.Thread(target=run_bot, daemon=True)
+bot_thread.start()
+logger.info("🤖 Polling поток запущен")
 
+# ─── Main (для локального запуска) ───────────────────────────────
 def main():
-    logger.info("🚀 Запуск PhotoLetters Bot на Render...")
-    bot_thread = threading.Thread(target=run_bot, daemon=True)
-    bot_thread.start()
     logger.info(f"🌐 Flask-сервер на порту {PORT}")
     flask_app.run(host="0.0.0.0", port=PORT, debug=False, threaded=True)
-
 
 if __name__ == "__main__":
     main()
