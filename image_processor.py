@@ -72,7 +72,8 @@ def create_collage(
     except (ValueError, AttributeError):
         bg_rgb = (0, 0, 0)
 
-    canvas = Image.new("RGBA", (CANVAS_W, CANVAS_H), (*bg_rgb, 255))
+    # Создаём основной canvas
+    canvas = Image.new("RGB", (CANVAS_W, CANVAS_H), bg_rgb)
 
     letter_w = CANVAS_W / len(word)
     config = FONTS_CONFIG.get(font_id, FONTS_CONFIG["impact"])
@@ -81,21 +82,25 @@ def create_collage(
 
     for i, (letter, photo_bytes) in enumerate(zip(word, photos)):
         lx = i * letter_w
-        temp = Image.new("RGBA", (CANVAS_W, CANVAS_H), (0, 0, 0, 0))
+
+        # Создаём слой с фото
+        photo_layer = Image.new("RGBA", (CANVAS_W, CANVAS_H), (0, 0, 0, 0))
 
         if photo_bytes:
             try:
                 img = Image.open(io.BytesIO(photo_bytes)).convert("RGBA")
+                # Масштабируем фото чтобы заполнить область буквы
                 scale = max(letter_w / img.width, CANVAS_H / img.height)
                 scaled_w = int(img.width * scale)
                 scaled_h = int(img.height * scale)
                 img = img.resize((scaled_w, scaled_h), Image.Resampling.LANCZOS)
                 offset_x = int(lx + (letter_w - scaled_w) / 2)
                 offset_y = int((CANVAS_H - scaled_h) / 2)
-                temp.paste(img, (offset_x, offset_y), img)
+                photo_layer.paste(img, (offset_x, offset_y), img)
             except Exception as e:
                 print(f"[WARN] Ошибка фото {i}: {e}")
 
+        # Создаём маску буквы
         mask = Image.new("L", (CANVAS_W, CANVAS_H), 0)
         draw = ImageDraw.Draw(mask)
         draw.text(
@@ -106,13 +111,14 @@ def create_collage(
             anchor="mm"
         )
 
-        temp.putalpha(mask)
-        canvas = Image.alpha_composite(canvas, temp)
+        # Применяем маску к фото (обрезаем фото по форме буквы)
+        photo_layer.putalpha(mask)
 
-    final = Image.new("RGB", (CANVAS_W, CANVAS_H), bg_rgb)
-    final.paste(canvas, mask=canvas.split()[3])
+        # Вставляем на canvas
+        canvas.paste(photo_layer, (0, 0), photo_layer)
 
+    # Сохраняем
     output = io.BytesIO()
-    final.save(output, format="PNG")
+    canvas.save(output, format="PNG")
     output.seek(0)
     return output.getvalue()
