@@ -7,8 +7,13 @@ import io
 import os
 from typing import List
 
-CANVAS_W = 1600
-CANVAS_H = 520
+# A4 формат в пикселях при 300 DPI (стандарт для печати)
+CANVAS_W = 3508  # ~A4 ширина
+CANVAS_H = 2480  # ~A4 высота
+
+# Или для экрана можно меньше, но всё равно большое:
+# CANVAS_W = 1920
+# CANVAS_H = 1080
 
 FONTS_CONFIG = {
     "impact": {"name": "Impact", "size_mult": 1.0},
@@ -42,14 +47,14 @@ def get_font(font_id: str, size: int) -> ImageFont.FreeTypeFont:
     return ImageFont.load_default()
 
 
-def compress_image(image_bytes: bytes, max_width: int = 1200) -> bytes:
+def compress_image(image_bytes: bytes, max_width: int = 2400) -> bytes:
     img = Image.open(io.BytesIO(image_bytes))
     scale = min(1.0, max_width / img.width)
     if scale < 1.0:
         new_size = (int(img.width * scale), int(img.height * scale))
         img = img.resize(new_size, Image.Resampling.LANCZOS)
     output = io.BytesIO()
-    img.save(output, format="JPEG", quality=82)
+    img.save(output, format="JPEG", quality=85)
     output.seek(0)
     return output.getvalue()
 
@@ -77,7 +82,9 @@ def create_collage(
 
     letter_w = CANVAS_W / len(word)
     config = FONTS_CONFIG.get(font_id, FONTS_CONFIG["impact"])
-    font_size = int(CANVAS_H * 0.96 * size_scale * config["size_mult"])
+    
+    # Шрифт на 90% высоты canvas, умноженный на size_scale
+    font_size = int(CANVAS_H * 0.90 * size_scale * config["size_mult"])
     font = get_font(font_id, font_size)
 
     for i, (letter, photo_bytes) in enumerate(zip(word, photos)):
@@ -111,14 +118,14 @@ def create_collage(
             anchor="mm"
         )
 
-        # Применяем маску к фото (обрезаем фото по форме буквы)
+        # Применяем маску к фото
         photo_layer.putalpha(mask)
 
         # Вставляем на canvas
         canvas.paste(photo_layer, (0, 0), photo_layer)
 
-    # Сохраняем
+    # Сохраняем в PNG с максимальным качеством
     output = io.BytesIO()
-    canvas.save(output, format="PNG")
+    canvas.save(output, format="PNG", optimize=True)
     output.seek(0)
     return output.getvalue()
