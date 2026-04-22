@@ -1,14 +1,13 @@
 """
-PhotoLetters Telegram Bot — Webhook для Render
+PhotoLetters Telegram Bot — Webhook через aiohttp для Render
 """
 
 import logging
 import os
 import sys
 import asyncio
-from io import BytesIO
 
-from flask import Flask, request
+from aiohttp import web
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     Application,
@@ -219,14 +218,12 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update and update.effective_message:
         await update.effective_message.reply_text("⚠️ Ошибка. Попробуй /start")
 
-# ─── Flask + Webhook ─────────────────────────────────────────────
-flask_app = Flask(__name__)
-
+# ─── aiohttp + Webhook ───────────────────────────────────────────
 WEBHOOK_PATH = f"/webhook/{TELEGRAM_TOKEN}"
 WEBHOOK_URL = f"https://letterbe-bot.onrender.com{WEBHOOK_PATH}"
 
-# Создаём Application
-application = Application.builder().token(TELEGRAM_TOKEN).build()
+# Создаём Application БЕЗ updater (чтобы не запускался polling)
+application = Application.builder().token(TELEGRAM_TOKEN).updater(None).build()
 
 conv_handler = ConversationHandler(
     entry_points=[CommandHandler("start", start)],
@@ -247,33 +244,40 @@ conv_handler = ConversationHandler(
 application.add_handler(conv_handler)
 application.add_error_handler(error_handler)
 
-@flask_app.route("/", methods=["GET"])
-def health():
-    return {"status": "ok", "service": "photoletters-bot", "mode": "webhook"}
+async def health(request):
+    return web.Response(text='{"status":"ok"}', content_type="application/json")
 
-@flask_app.route("/health", methods=["GET"])
-def health_check():
-    return {"status": "ok"}
-
-@flask_app.route(WEBHOOK_PATH, methods=["POST"])
-def webhook():
+async def webhook_handler(request):
     """Получает обновления от Telegram"""
-    update = Update.de_json(request.get_json(force=True), application.bot)
-    # Синхронно запускаем async обработку
-    asyncio.get_event_loop().run_until_complete(application.process_update(update))
-    return "ok", 200
+    data = await request.json()
+    update = Update.de_json(data, application.bot)
+    await application.process_update(update)
+    return web.Response(text="ok")
 
-async def setup():
-    """Инициализация и установка webhook"""
+async def main():
+    logger.info("🚀 Запуск PhotoLetters Bot (aiohttp webhook)...")
+    
+    # Инициализация без запуска polling
     await application.initialize()
     await application.bot.set_webhook(url=WEBHOOK_URL)
     logger.info(f"✅ Webhook установлен: {WEBHOOK_URL}")
-
-def main():
-    logger.info("🚀 Запуск PhotoLetters Bot (webhook)...")
-    asyncio.run(setup())
-    logger.info(f"🌐 Flask-сервер на порту {PORT}")
-    flask_app.run(host="0.0.0.0", port=PORT, debug=False, threaded=True)
+    
+    # aiohttp сервер
+    app = web.Application()
+    app.router.add_get("/", health)
+    app.router.add_get("/health", health)
+    app.router.add_post(WEBHOOK_PATH, webhook_handler)
+    
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", PORT)
+    await site.start()
+    
+    logger.info(f"🌐 Сервер слушает на порту {PORT}")
+    
+    # Держим сервер живым
+    while True:
+        await asyncio.sleep(3600)
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
